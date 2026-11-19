@@ -160,22 +160,48 @@ function updateStats(age, birthDate, now) {
     statsEl.hidden = false;
 }
 
+/** True if `year` is a Gregorian leap year. */
+function isLeapYear(year) {
+    return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
 /**
- * Builds the "Next birthday" text, e.g. "Sat, Mar 14, 2026 (42 days left)".
+ * The date on which the birthday is observed in a given year.
+ * Feb 29 births are observed on 1 March in non-leap years. This is explicit
+ * (not left to Date's silent overflow) and matches what getAgeBreakdown()
+ * does, so both parts of the UI always agree.
+ */
+function getBirthdayInYear(birthDate, year) {
+    const month = birthDate.getMonth();
+    const day = birthDate.getDate();
+
+    if (month === 1 && day === 29 && !isLeapYear(year)) {
+        return new Date(year, 2, 1);
+    }
+    return new Date(year, month, day);
+}
+
+/**
+ * Builds the "Next birthday" text, e.g. "Sat, Mar 14, 2026 (42 days left)",
+ * or "(Today!)" when today is the birthday.
  */
 function getNextBirthdayText(birthDate, now) {
     const thisYear = now.getFullYear();
-    // Same day/month as the birth date, but in the current year
-    let nextBirthday = new Date(thisYear, birthDate.getMonth(), birthDate.getDate());
+    // Compare against the START of today. Birthdays are midnight dates, so
+    // comparing with the current time would wrongly treat today's birthday
+    // as already passed.
+    const today = new Date(thisYear, now.getMonth(), now.getDate());
 
-    // Already passed this year -> the next one is next year
-    if (nextBirthday < now) {
-        nextBirthday = new Date(thisYear + 1, birthDate.getMonth(), birthDate.getDate());
+    let nextBirthday = getBirthdayInYear(birthDate, thisYear);
+
+    // Strictly before today -> already passed, so use next year's
+    if (nextBirthday < today) {
+        nextBirthday = getBirthdayInYear(birthDate, thisYear + 1);
     }
 
-    const diffMs = nextBirthday - now;
-    // ceil: a partial day still counts as "1 day left"
-    const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+    // Whole calendar days between two midnights. round() (not floor/ceil)
+    // absorbs the +/-1 hour error when a daylight-saving change is in between.
+    const diffDays = Math.round((nextBirthday - today) / (24 * 60 * 60 * 1000));
 
     // Human-friendly date format (en-US, short weekday/month)
     const formatter = new Intl.DateTimeFormat('en-US', {
@@ -185,8 +211,12 @@ function getNextBirthdayText(birthDate, now) {
         day: 'numeric'
     });
 
-    // Singular/plural handling: "1 day left" vs "2 days left"
-    return `${formatter.format(nextBirthday)} (${diffDays} day${diffDays === 1 ? '' : 's'} left)`;
+    const label = diffDays === 0
+        ? 'Today!'
+        // Singular/plural handling: "1 day left" vs "2 days left"
+        : `${diffDays} day${diffDays === 1 ? '' : 's'} left`;
+
+    return `${formatter.format(nextBirthday)} (${label})`;
 }
 
 /**
@@ -199,33 +229,20 @@ function startTimer(birthDate) {
 
     timerInterval = setInterval(() => {
         const now = new Date();
-        const elapsed = now - birthDate; // total ms lived
 
-        // Break elapsed time down into seconds/minutes/hours/days.
-        // Each "total" is the whole count; the "%" gives the part that
-        // shows on the clock (e.g. 75 minutes -> 1h 15m).
-        const totalSeconds = Math.floor(elapsed / 1000);
-        const seconds = totalSeconds % 60;
-        const totalMinutes = Math.floor(totalSeconds / 60);
-        const minutes = totalMinutes % 60;
-        const totalHours = Math.floor(totalMinutes / 60);
-        const hours = totalHours % 24;
-        const totalDays = Math.floor(totalHours / 24);
+        // Years/months/days come from the same calendar-exact function as the
+        // result message, so the timer can never disagree with it.
+        const { years, months, days } = getAgeBreakdown(birthDate, now);
 
-        // Years/months here are APPROXIMATIONS using average lengths
-        // (365.25 days per year, 30.44 days per month), so they can differ
-        // by a day or so from the exact calendar breakdown shown above.
-        const years = Math.floor(totalDays / 365.25);
-        const remainingDaysAfterYears = Math.floor(totalDays - years * 365.25);
-        const months = Math.floor(remainingDaysAfterYears / 30.44);
-        const days = Math.floor(remainingDaysAfterYears - months * 30.44);
-
+        // birthDate is local midnight, so the time elapsed since the last
+        // "day boundary" is simply the current time of day. This stays right
+        // across daylight-saving changes (unlike dividing total ms by 24h).
         document.getElementById('years').textContent = padNumber(years);
         document.getElementById('months').textContent = padNumber(months);
         document.getElementById('days').textContent = padNumber(days);
-        document.getElementById('hours').textContent = padNumber(hours);
-        document.getElementById('minutes').textContent = padNumber(minutes);
-        document.getElementById('seconds').textContent = padNumber(seconds);
+        document.getElementById('hours').textContent = padNumber(now.getHours());
+        document.getElementById('minutes').textContent = padNumber(now.getMinutes());
+        document.getElementById('seconds').textContent = padNumber(now.getSeconds());
     }, 1000);
 }
 
